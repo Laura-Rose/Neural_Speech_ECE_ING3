@@ -1,0 +1,47 @@
+import re
+import numpy as np
+import matplotlib.pyplot as plt
+
+INPUT_FILE = "FP4.txt"
+OUTPUT_IMAGE = "mfcc_heatmap.png"
+OUTPUT_MATRIX_TXT = "mfcc_matrix.txt"
+
+pattern = re.compile(
+    r"MFCC_FRAME\s+(\d+)\s*\n((?:[-+]?\d+(?:\.\d+)?\s*\n){13})"
+)
+
+with open(INPUT_FILE, "r", encoding="utf-8") as f:
+    text = f.read()
+
+frames = []
+for match in pattern.finditer(text):
+    frame_index = int(match.group(1))
+    values = [float(x) for x in match.group(2).strip().splitlines()]
+    frames.append((frame_index, values))
+
+if not frames:
+    raise ValueError("Aucune frame MFCC trouvee dans le fichier.")
+
+frames.sort(key=lambda x: x[0])
+
+# matrice de taille 13 x N
+mfcc_matrix = np.array([values for _, values in frames], dtype=float).T
+
+# sauvegarde de la matrice dans un fichier texte
+np.savetxt(OUTPUT_MATRIX_TXT, mfcc_matrix, fmt="%.6f")
+
+# creation de la heatmap
+plt.figure(figsize=(10, 5))
+img = plt.imshow(mfcc_matrix[1:, :], aspect="auto", origin="lower")
+plt.colorbar(img, label="Valeur MFCC")
+plt.xlabel("Frame")
+plt.ylabel("Coefficient MFCC (sans C0)")
+plt.title("Heatmap des MFCC sans le coefficient 0")
+plt.tight_layout()
+plt.savefig("mfcc_heatmap_sans_c0.png", dpi=180)
+plt.show()
+
+print("Nombre de frames :", mfcc_matrix.shape[1])
+print("Dimensions matrice :", mfcc_matrix.shape[0], "x", mfcc_matrix.shape[1])
+print("Heatmap sauvegardee dans :", OUTPUT_IMAGE)
+print("Matrice sauvegardee dans :", OUTPUT_MATRIX_TXT)
