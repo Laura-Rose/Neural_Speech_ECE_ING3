@@ -1,0 +1,235 @@
+import re
+import urllib.request
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+
+# =========================
+# CONFIG
+# =========================
+TRAIN_URL = "https://raw.githubusercontent.com/ElectroniqueECE/Projet_ING3/main/training.txt"
+TEST_URL = "https://raw.githubusercontent.com/ElectroniqueECE/Projet_ING3/main/test.txt"
+
+N_TRAIN = 100
+N_TEST = 10
+N_FRAMES = 48
+N_MFCC = 13
+N_CLASSES = 2
+CLASS_NAMES = ["Rouge", "Bleu"]
+
+SEED = 42
+EPOCHS = 80
+BATCH_SIZE = 8
+LR = 1e-3
+
+np.random.seed(SEED)
+
+# =========================
+# OUTILS
+# =========================
+def download_text(url: str) -> str:
+    with urllib.request.urlopen(url) as response:
+        return response.read().decode("utf-8", errors="ignore")
+
+def extract_array_numbers(text: str) -> np.ndarray:
+    part = text.split("=", 1)[1]
+    start = part.find("{")
+    end = part.rfind("}")
+    body = part[start:end + 1]
+    nums = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", body)
+    return np.array([float(x) for x in nums], dtype=np.float32)
+
+def reshape_dataset(values: np.ndarray, n_samples: int, n_frames: int, n_mfcc: int) -> np.ndarray:
+    expected = n_samples * n_frames * n_mfcc
+    if len(values) != expected:
+        raise ValueError(f"Trouve {len(values)} valeurs, attendu {expected}")
+    return values.reshape(n_samples, n_frames, n_mfcc)
+
+def build_labels_train():
+    # 50 Rouge puis 50 Bleu
+    return np.array([0] * 50 + [1] * 50, dtype=np.int32)
+
+def build_labels_test():
+    # 5 Rouge puis 5 Bleu
+    return np.array([0] * 5 + [1] * 5, dtype=np.int32)
+
+def normalize_per_feature(X_train, X_val, X_test):
+    # normalisation par coefficient MFCC/frame sur le train seulement
+    mean = X_train.mean(axis=0, keepdims=True)
+    std = X_train.std(axis=0, keepdims=True) + 1e-8
+
+    X_train_n = (X_train - mean) / std
+    X_val_n = (X_val - mean) / std
+    X_test_n = (X_test - mean) / std
+    return X_train_n, X_val_n, X_test_n
+
+def build_cnn(input_shape):
+    model = Sequential([
+        Input(shape=input_shape),
+
+        Conv2D(8, (3, 3), activation="relu", padding="same"),
+        MaxPooling2D((2, 2)),
+
+        Conv2D(16, (3, 3), activation="relu", padding="same"),
+        MaxPooling2D((2, 2)),
+
+        Flatten(),
+        Dense(32, activation="relu"),
+        Dropout(0.3),
+        Dense(N_CLASSES, activation="softmax")
+    ])
+
+    model.compile(
+        optimizer=Adam(learning_rate=LR),
+        loss="categorical_crossentropy",
+        metrics=["accuracy"]
+    )
+    return model
+
+def plot_history(history):
+    plt.figure(figsize=(8, 4))
+    plt.plot(history.history["loss"], label="train_loss")
+    plt.plot(history.history["val_loss"], label="val_loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Evolution de la loss")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("et7_loss.png", dpi=180)
+    plt.show()
+
+    plt.figure(figsize=(8, 4))
+    plt.plot(history.history["accuracy"], label="train_accuracy")
+    plt.plot(history.history["val_accuracy"], label="val_accuracy")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.title("Evolution de l accuracy")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("et7_accuracy.png", dpi=180)
+    plt.show()
+
+# =========================
+# CHARGEMENT
+# =========================
+print("Telechargement...")
+train_text = download_text(TRAIN_URL)
+test_text = download_text(TEST_URL)
+
+train_vals = extract_array_numbers(train_text)
+test_vals = extract_array_numbers(test_text)
+
+print("Valeurs train :", train_vals.size)
+print("Valeurs test  :", test_vals.size)
+
+X_train_full = reshape_dataset(train_vals, N_TRAIN, N_FRAMES, N_MFCC)
+X_test = reshape_dataset(test_vals, N_TEST, N_FRAMES, N_MFCC)
+
+y_train_full = build_labels_train()
+y_test = build_labels_test()
+
+# =========================
+# SPLIT STRATIFIE
+# =========================
+X_train, X_val, y_train, y_val = train_test_split(
+    X_train_full,
+    y_train_full,
+    test_size=0.2,
+    random_state=SEED,
+    stratify=y_train_full,
+    shuffle=True
+)
+
+# =========================
+# NORMALISATION
+# =========================
+X_train, X_val, X_test = normalize_per_feature(X_train, X_val, X_test)
+
+# forme CNN
+X_train = X_train[..., np.newaxis]
+X_val = X_val[..., np.newaxis]
+X_test = X_test[..., np.newaxis]
+
+y_train_oh = to_categorical(y_train, num_classes=N_CLASSES)
+y_val_oh = to_categorical(y_val, num_classes=N_CLASSES)
+y_test_oh = to_categorical(y_test, num_classes=N_CLASSES)
+
+print("X_train :", X_train.shape)
+print("X_val   :", X_val.shape)
+print("X_test  :", X_test.shape)
+
+# =========================
+# MODELE
+# =========================
+model = build_cnn(X_train.shape[1:])
+model.summary()
+
+callbacks = [
+    EarlyStopping(
+        monitor="val_loss",
+        patience=12,
+        restore_best_weights=True,
+        verbose=1
+    ),
+    ReduceLROnPlateau(
+        monitor="val_loss",
+        factor=0.5,
+        patience=6,
+        min_lr=1e-5,
+        verbose=1
+    )
+]
+
+history = model.fit(
+    X_train, y_train_oh,
+    validation_data=(X_val, y_val_oh),
+    epochs=EPOCHS,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    callbacks=callbacks,
+    verbose=1
+)
+
+plot_history(history)
+
+# =========================
+# EVALUATION
+# =========================
+train_pred = model.predict(X_train, verbose=0)
+val_pred = model.predict(X_val, verbose=0)
+test_pred = model.predict(X_test, verbose=0)
+
+mse_train = mean_squared_error(y_train_oh.reshape(-1), train_pred.reshape(-1))
+mse_val = mean_squared_error(y_val_oh.reshape(-1), val_pred.reshape(-1))
+mse_test = mean_squared_error(y_test_oh.reshape(-1), test_pred.reshape(-1))
+
+acc_train = np.mean(np.argmax(train_pred, axis=1) == y_train)
+acc_val = np.mean(np.argmax(val_pred, axis=1) == y_val)
+acc_test = np.mean(np.argmax(test_pred, axis=1) == y_test)
+
+print("\n===== RESULTATS =====")
+print(f"MSE train : {mse_train:.6f}")
+print(f"MSE val   : {mse_val:.6f}")
+print(f"MSE test  : {mse_test:.6f}")
+print(f"Accuracy train : {acc_train:.4f}")
+print(f"Accuracy val   : {acc_val:.4f}")
+print(f"Accuracy test  : {acc_test:.4f}")
+
+if mse_test < 0.05:
+    print("Objectif ET7 atteint : MSE test < 0.05")
+else:
+    print("Objectif ET7 NON atteint : MSE test >= 0.05")
+
+print("\nPredictions test :")
+for i, (pred, truth) in enumerate(zip(np.argmax(test_pred, axis=1), y_test)):
+    print(
+        f"Test {i:02d} | vrai={CLASS_NAMES[truth]} | "
+        f"predit={CLASS_NAMES[pred]} | proba={test_pred[i]}"
+    )
